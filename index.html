@@ -1,1 +1,336 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><link rel="icon" href="/bingo/favicon.ico"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="theme-color" content="#000000"/><meta name="description" content="Web site created using create-react-app"/><link rel="apple-touch-icon" href="/bingo/logo192.png"/><link rel="manifest" href="/bingo/manifest.json"/><title>React App</title><script defer="defer" src="/bingo/static/js/main.18131c58.js"></script><link href="/bingo/static/css/main.073c9b0a.css" rel="stylesheet"></head><body><noscript>You need to enable JavaScript to run this app.</noscript><div id="root"></div></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Wishlist & Sales Estimator</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#12161b; --muted:#9aa4b2; --text:#e8eef6; --accent:#7dd3fc; --accent2:#a78bfa; --ok:#34d399; --warn:#fbbf24;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; font:16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji"; background:radial-gradient(1000px 600px at 10% -10%, #1a2430 0%, #0b0d10 60%);}
+  header{padding:28px 20px 8px; text-align:center; color:var(--text)}
+  header h1{margin:0 0 4px; font-size:22px}
+  header p{margin:0; color:var(--muted); font-size:14px}
+  .wrap{max-width:980px; margin:24px auto 48px; padding:0 16px}
+  .grid{display:grid; gap:16px}
+  @media(min-width:860px){ .grid{grid-template-columns: 1.2fr 0.8fr} }
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border:1px solid #1f2937; border-radius:var(--radius); padding:18px; color:var(--text); backdrop-filter: blur(6px)}
+  .card h2{margin:0 0 12px; font-size:18px}
+  .row{display:flex; gap:12px; align-items:center; margin:12px 0}
+  label{min-width:160px; color:var(--muted)}
+  input[type=number]{width:100%; padding:10px 12px; border-radius:10px; background:#0f141a; border:1px solid #1f2937; color:var(--text)}
+  input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{opacity:1}
+  .hint{color:var(--muted); font-size:13px; margin-top:6px}
+  .pill{display:inline-block; padding:6px 10px; border-radius:999px; background:#0e151d; border:1px solid #1f2937; color:var(--muted); font-size:12px}
+  .outputs{display:grid; gap:10px; grid-template-columns: repeat(3, 1fr); margin-top:10px}
+  .out{background:#0d1218; border:1px dashed #223042; border-radius:12px; padding:12px}
+  .out h3{margin:0 0 6px; font-size:13px; color:var(--muted); font-weight:600}
+  .out .num{font-variant-numeric: tabular-nums; font-size:20px}
+  .out.min .num{color:var(--warn)}
+  .out.avg .num{color:var(--accent)}
+  .out.max .num{color:var(--ok)}
+  details summary{cursor:pointer; list-style:none; color:var(--accent2); margin:-6px 0 10px; font-weight:600}
+  details summary::-webkit-details-marker{display:none}
+  .assump-grid{display:grid; grid-template-columns: repeat(3, 1fr); gap:10px}
+  .btns{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px}
+  button{border:1px solid #243244; background:#0f141a; color:var(--text); padding:9px 12px; border-radius:10px; cursor:pointer}
+  button:hover{background:#131a22}
+  .note{font-size:12px; color:var(--muted); margin-top:10px}
+  .footer-note{color:#7c8796; text-align:center; margin-top:18px; font-size:12px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+  <header>
+    <h1>Wishlist & Sales Estimator</h1>
+    <p>Quick heuristics for indie store metrics. Tweak assumptions to fit your game.</p>
+  </header>
+  <div class="wrap grid">
+    <section class="card">
+      <h2>1) Followers → Wishlists & Sales</h2>
+      <div class="row">
+        <label for="followers">Followers</label>
+        <input id="followers" type="number" inputmode="numeric" min="0" placeholder="e.g., 1200">
+      </div>
+
+      <details>
+        <summary>Assumptions (click to edit)</summary>
+        <div class="hint">Default multipliers are conservative-but-plausible starting points. Adjust to your genre/market.</div>
+        <div class="assump-grid">
+          <div>
+            <div class="pill">Wishlists per Follower</div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Min</label><input id="wlPerFollowerMin" type="number" step="0.1" min="0" value="6">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Avg</label><input id="wlPerFollowerAvg" type="number" step="0.1" min="0" value="10">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Max</label><input id="wlPerFollowerMax" type="number" step="0.1" min="0" value="16">
+            </div>
+          </div>
+          <div>
+            <div class="pill">Sales from Wishlists (launch window)</div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Min ×</label><input id="salesFromWlMin" type="number" step="0.01" min="0" value="0.15">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Avg ×</label><input id="salesFromWlAvg" type="number" step="0.01" min="0" value="0.30">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Max ×</label><input id="salesFromWlMax" type="number" step="0.01" min="0" value="0.60">
+            </div>
+          </div>
+          <div>
+            <div class="pill">Formatting</div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Thousands sep.</label><input id="sep" type="text" value="," maxlength="1">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Decimals</label><input id="decimals" type="number" min="0" max="2" value="0">
+            </div>
+          </div>
+        </div>
+        <div class="btns">
+          <button id="saveA1">Save assumptions</button>
+          <button id="resetA1">Reset defaults</button>
+        </div>
+      </details>
+
+      <div class="outputs" id="wlBoxes">
+        <div class="out min">
+          <h3>Wishlists (min)</h3>
+          <div class="num" id="wlMin">0</div>
+        </div>
+        <div class="out avg">
+          <h3>Wishlists (avg)</h3>
+          <div class="num" id="wlAvg">0</div>
+        </div>
+        <div class="out max">
+          <h3>Wishlists (max)</h3>
+          <div class="num" id="wlMax">0</div>
+        </div>
+      </div>
+
+      <div class="outputs" style="margin-top:6px">
+        <div class="out min">
+          <h3>Sales (min)</h3>
+          <div class="num" id="salesMin">0</div>
+        </div>
+        <div class="out avg">
+          <h3>Sales (avg)</h3>
+          <div class="num" id="salesAvg">0</div>
+        </div>
+        <div class="out max">
+          <h3>Sales (max)</h3>
+          <div class="num" id="salesMax">0</div>
+        </div>
+      </div>
+
+      <div class="note">Note: “Sales from Wishlists” refers to a near-launch window heuristic. Long-tail/discount cycles can materially change totals.</div>
+    </section>
+
+    <section class="card">
+      <h2>2) Feedbacks/Reviews → Sales</h2>
+      <div class="row">
+        <label for="reviews">Feedbacks (public reviews)</label>
+        <input id="reviews" type="number" inputmode="numeric" min="0" placeholder="e.g., 240">
+      </div>
+
+      <details>
+        <summary>Assumptions (click to edit)</summary>
+        <div class="hint">Rule of thumb: many games see 1 review per ~30–80 sales, but it varies by price, region mix, and audience.</div>
+        <div class="assump-grid">
+          <div>
+            <div class="pill">Sales per Review</div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Min</label><input id="salesPerReviewMin" type="number" step="1" min="1" value="30">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Avg</label><input id="salesPerReviewAvg" type="number" step="1" min="1" value="50">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Max</label><input id="salesPerReviewMax" type="number" step="1" min="1" value="80">
+            </div>
+          </div>
+          <div>
+            <div class="pill">Formatting</div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Thousands sep.</label><input id="sep2" type="text" value="," maxlength="1">
+            </div>
+            <div class="row" style="margin:8px 0 0">
+              <label>Decimals</label><input id="decimals2" type="number" min="0" max="2" value="0">
+            </div>
+          </div>
+        </div>
+        <div class="btns">
+          <button id="saveA2">Save assumptions</button>
+          <button id="resetA2">Reset defaults</button>
+        </div>
+      </details>
+
+      <div class="outputs">
+        <div class="out min">
+          <h3>Sales (min)</h3>
+          <div class="num" id="rvSalesMin">0</div>
+        </div>
+        <div class="out avg">
+          <h3>Sales (avg)</h3>
+          <div class="num" id="rvSalesAvg">0</div>
+        </div>
+        <div class="out max">
+          <h3>Sales (max)</h3>
+          <div class="num" id="rvSalesMax">0</div>
+        </div>
+      </div>
+      <div class="note">Treat “feedbacks” as public, store-visible reviews. If you meant private survey responses, adjust “Sales per Review” upward.</div>
+    </section>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>FAQ / Tips</h2>
+      <ul class="hint" style="margin:0 0 6px 18px">
+        <li>These are heuristics, not forecasts. Use genre comps, pricing, discounts, featuring, and platform benchmarks to refine.</li>
+        <li>Save your custom multipliers — they’ll persist in your browser.</li>
+        <li>You can version this file per game/project and tweak assumptions separately.</li>
+      </ul>
+      <div class="footer-note">Built as a single static HTML file — perfect for GitHub Pages hosting.</div>
+    </div>
+  </div>
+
+<script>
+  // ---------- Utilities
+  const clampNum = (n)=> isFinite(n) && n>0 ? n : 0;
+  const fmt = (n, sep, decimals=0)=>{
+    if (!isFinite(n)) return "0";
+    const parts = Number(n).toFixed(decimals).split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, sep || ',');
+    return parts.join(decimals>0?'.':'');
+  };
+
+  // ---------- DOM
+  const followers = document.getElementById('followers');
+  const wlMin = document.getElementById('wlMin');
+  const wlAvg = document.getElementById('wlAvg');
+  const wlMax = document.getElementById('wlMax');
+  const salesMin = document.getElementById('salesMin');
+  const salesAvg = document.getElementById('salesAvg');
+  const salesMax = document.getElementById('salesMax');
+
+  const wlPerFollowerMin = document.getElementById('wlPerFollowerMin');
+  const wlPerFollowerAvg = document.getElementById('wlPerFollowerAvg');
+  const wlPerFollowerMax = document.getElementById('wlPerFollowerMax');
+  const salesFromWlMin = document.getElementById('salesFromWlMin');
+  const salesFromWlAvg = document.getElementById('salesFromWlAvg');
+  const salesFromWlMax = document.getElementById('salesFromWlMax');
+  const sep = document.getElementById('sep');
+  const decimals = document.getElementById('decimals');
+
+  const reviews = document.getElementById('reviews');
+  const rvSalesMin = document.getElementById('rvSalesMin');
+  const rvSalesAvg = document.getElementById('rvSalesAvg');
+  const rvSalesMax = document.getElementById('rvSalesMax');
+  const salesPerReviewMin = document.getElementById('salesPerReviewMin');
+  const salesPerReviewAvg = document.getElementById('salesPerReviewAvg');
+  const salesPerReviewMax = document.getElementById('salesPerReviewMax');
+  const sep2 = document.getElementById('sep2');
+  const decimals2 = document.getElementById('decimals2');
+
+  const defaults = {
+    a1:{ wlMin:6, wlAvg:10, wlMax:16, sMin:0.15, sAvg:0.30, sMax:0.60, sep:",", decimals:0 },
+    a2:{ sprMin:30, sprAvg:50, sprMax:80, sep:",", decimals:0 }
+  };
+
+  // ---------- Persistence
+  const loadAssumptions = ()=>{
+    const a1 = JSON.parse(localStorage.getItem('estimator:a1')||'null') || defaults.a1;
+    const a2 = JSON.parse(localStorage.getItem('estimator:a2')||'null') || defaults.a2;
+
+    wlPerFollowerMin.value = a1.wlMin; wlPerFollowerAvg.value = a1.wlAvg; wlPerFollowerMax.value = a1.wlMax;
+    salesFromWlMin.value = a1.sMin; salesFromWlAvg.value = a1.sAvg; salesFromWlMax.value = a1.sMax;
+    sep.value = a1.sep; decimals.value = a1.decimals;
+
+    salesPerReviewMin.value = a2.sprMin; salesPerReviewAvg.value = a2.sprAvg; salesPerReviewMax.value = a2.sprMax;
+    sep2.value = a2.sep; decimals2.value = a2.decimals;
+  };
+  const saveA1 = ()=>{
+    localStorage.setItem('estimator:a1', JSON.stringify({
+      wlMin: +wlPerFollowerMin.value, wlAvg:+wlPerFollowerAvg.value, wlMax:+wlPerFollowerMax.value,
+      sMin:+salesFromWlMin.value, sAvg:+salesFromWlAvg.value, sMax:+salesFromWlMax.value,
+      sep: sep.value || ",", decimals: +decimals.value
+    }));
+    calcFollowers();
+  };
+  const saveA2 = ()=>{
+    localStorage.setItem('estimator:a2', JSON.stringify({
+      sprMin:+salesPerReviewMin.value, sprAvg:+salesPerReviewAvg.value, sprMax:+salesPerReviewMax.value,
+      sep: sep2.value || ",", decimals:+decimals2.value
+    }));
+    calcReviews();
+  };
+
+  // ---------- Calculators
+  function calcFollowers(){
+    const f = clampNum(+followers.value);
+    const wlpfMin = Math.max(0, +wlPerFollowerMin.value);
+    const wlpfAvg = Math.max(0, +wlPerFollowerAvg.value);
+    const wlpfMax = Math.max(0, +wlPerFollowerMax.value);
+    const sfwMin = Math.max(0, +salesFromWlMin.value);
+    const sfwAvg = Math.max(0, +salesFromWlAvg.value);
+    const sfwMax = Math.max(0, +salesFromWlMax.value);
+    const thousand = (sep.value||",").slice(0,1);
+    const dec = Math.max(0, Math.min(2, +decimals.value||0));
+
+    const wMin = f * wlpfMin;
+    const wAvg = f * wlpfAvg;
+    const wMax = f * wlpfMax;
+
+    wlMin.textContent = fmt(wMin, thousand, dec);
+    wlAvg.textContent = fmt(wAvg, thousand, dec);
+    wlMax.textContent = fmt(wMax, thousand, dec);
+
+    salesMin.textContent = fmt(wMin * sfwMin, thousand, dec);
+    salesAvg.textContent = fmt(wAvg * sfwAvg, thousand, dec);
+    salesMax.textContent = fmt(wMax * sfwMax, thousand, dec);
+  }
+
+  function calcReviews(){
+    const r = clampNum(+reviews.value);
+    const sprMin = Math.max(1, +salesPerReviewMin.value);
+    const sprAvg = Math.max(1, +salesPerReviewAvg.value);
+    const sprMax = Math.max(1, +salesPerReviewMax.value);
+    const thousand = (sep2.value||",").slice(0,1);
+    const dec = Math.max(0, Math.min(2, +decimals2.value||0));
+
+    rvSalesMin.textContent = fmt(r * sprMin, thousand, dec);
+    rvSalesAvg.textContent = fmt(r * sprAvg, thousand, dec);
+    rvSalesMax.textContent = fmt(r * sprMax, thousand, dec);
+  }
+
+  // ---------- Events
+  followers.addEventListener('input', calcFollowers);
+  reviews.addEventListener('input', calcReviews);
+
+  document.getElementById('saveA1').addEventListener('click', saveA1);
+  document.getElementById('saveA2').addEventListener('click', saveA2);
+
+  document.getElementById('resetA1').addEventListener('click', ()=>{
+    localStorage.removeItem('estimator:a1');
+    loadAssumptions(); calcFollowers();
+  });
+  document.getElementById('resetA2').addEventListener('click', ()=>{
+    localStorage.removeItem('estimator:a2');
+    loadAssumptions(); calcReviews();
+  });
+
+  // ---------- Init
+  loadAssumptions();
+  calcFollowers();
+  calcReviews();
+</script>
+</body>
+</html>
