@@ -1,16 +1,29 @@
 #!/usr/bin/env node
 
 const fs = require("fs");
-const path = require("path");
 
 const files = process.argv.slice(2);
+let hasErrors = false;
+
+const SHORT_OBJECT_MAX_LEN = 140;
+
+const ORDER = [
+    "@P", "@ID", "id",
+    "type", "mode", "action", "lookup",
+    "group", "slice", "sound", "event_name",
+    "size", "pos", "pivot", "ratio",
+    "layout", "props", "@O", "@H",
+    "visible", "opacity",
+    "from", "to", "from.x", "from.y", "to.x", "to.y",
+    "duration", "repeat", "interpolator",
+    "states",
+    "content"
+];
 
 if (!files.length) {
     console.error("Usage: node tools/jmm-check.js <file.jmm> [...files]");
     process.exit(1);
 }
-
-let hasErrors = false;
 
 for (const file of files) {
     const text = fs.readFileSync(file, "utf8");
@@ -18,8 +31,10 @@ for (const file of files) {
     checkJson(file, text);
     checkTabs(file, text);
     checkTrailingWhitespace(file, text);
-    checkIndent(file, text);
-    checkCommonPropertyOrder(file, text);
+    checkSpacesAfterColonAndComma(file, text);
+    checkMultilineSmallObjects(file, text);
+    checkPropertyOrder(file, text);
+    checkContentLast(file, text);
 }
 
 process.exit(hasErrors ? 1 : 0);
@@ -38,52 +53,149 @@ function checkJson(file, text) {
 }
 
 function checkTabs(file, text) {
-    text.split(/\r?\n/).forEach((line, index) => {
+    lines(text).forEach((line, i) => {
         if (line.includes("\t")) {
-            report(file, index + 1, "Tabs are not allowed. Use 4 spaces.");
+            report(file, i + 1, "Tabs are not allowed. Use spaces.");
         }
     });
 }
 
 function checkTrailingWhitespace(file, text) {
-    text.split(/\r?\n/).forEach((line, index) => {
+    lines(text).forEach((line, i) => {
         if (/[ \t]+$/.test(line)) {
-            report(file, index + 1, "Trailing whitespace.");
+            report(file, i + 1, "Trailing whitespace.");
         }
     });
 }
 
-function checkIndent(file, text) {
-    text.split(/\r?\n/).forEach((line, index) => {
-        if (!line.trim()) return;
+function checkSpacesAfterColonAndComma(file, text) {
+    lines(text).forEach((line, i) => {
+        if (line.trim().startsWith("//")) return;
 
-        const spaces = line.match(/^ */)[0].length;
+        if (/"[^"]+"\s*:[^\s{}\[\]",0-9\-]/.test(line)) {
+            report(file, i + 1, "Expected one space after colon.");
+        }
 
-        if (spaces % 4 !== 0) {
-            report(file, index + 1, `Indent should be multiple of 4 spaces. Found ${spaces}.`);
+        if (/,[^\s{}\[\]"]/g.test(line)) {
+            report(file, i + 1, "Expected one space after comma.");
         }
     });
 }
 
-function checkCommonPropertyOrder(file, text) {
-    const lines = text.split(/\r?\n/);
+function checkMultilineSmallObjects(file, text) {
+    const ls = lines(text);
 
-    lines.forEach((line, index) => {
-        const compactObjectMatch = line.match(/\{(.+)\}/);
-        if (!compactObjectMatch) return;
+    for (let i = 0; i < ls.length; i++) {
+        const line = ls[i];
 
-        const body = compactObjectMatch[1];
+        if (!line.trim().endsWith("{")) continue;
 
-        const typeIndex = body.indexOf('"type"');
-        const contentIndex = body.indexOf('"content"');
-        const lookupIndex = body.indexOf('"lookup"');
+        const startLine = i;
+        let depth = 0;
+        let collected = "";
 
-        if (contentIndex !== -1 && typeIndex !== -1 && contentIndex < typeIndex) {
-            report(file, index + 1, `"content" should not be before "type".`);
+        for (let j = i; j < ls.length; j++) {
+            const current = stripStrings(ls[j]);
+
+            depth += countChar(current, "{");
+            depth -= countChar(current, "}");
+
+            collected += ls[j].trim() + " ";
+
+            if (depth === 0) {
+                const objectText = collected.trim();
+
+                const isSmall =
+                    objectText.length <= SHORT_OBJECT_MAX_LEN &&
+                    !objectText.includes('"content"') &&
+                    !objectText.includes('"layout"') &&
+                    !objectText.includes('"props"') &&
+                    !objectText.includes('"states"') &&
+                    !objectText.includes('"@O"') &&
+                    !objectText.includes('"@H"');
+
+                const isMultiline = j > startLine;
+
+                if (isSmall && isMultiline) {
+                    report(
+                        file,
+                        startLine + 1,
+                        `Small object should probably be stored in one line (${objectText.length} chars).`
+                    );
+                }
+
+                break;
+            }
         }
+    }
+}
 
-        if (contentIndex !== -1 && lookupIndex !== -1 && contentIndex < lookupIndex) {
-            report(file, index + 1, `"content" should be after "lookup".`);
+function checkPropertyOrder(file, text) {
+    const ls = lines(text);
+
+    ls.forEach((line, i) => {
+        const keys = extractKeysFromCompactObject(line);
+
+        if (keys.length < 2) return;
+
+        let previousRank = -1;
+
+        for (const key of keys) {
+            const rank = getRank(key);
+
+            if (rank < previousRank) {
+                report(
+                    file,
+                    i + 1,
+                    `Property "${key}" seems to be in wrong order. Expected common JMM order.`
+                );
+                return;
+            }
+
+            previousRank = rank;
         }
     });
+}
+
+function checkContentLast(file, text) {
+    lines(text).forEach((line, i) => {
+        const keys = extractKeysFromCompactObject(line);
+
+        if (keys.includes("content") && keys[keys.length - 1] !== "content") {
+            report(file, i + 1, `"content" should be the last property.`);
+        }
+    });
+}
+
+function extractKeysFromCompactObject(line) {
+    const trimmed = line.trim();
+
+    if (!trimmed.includes("{") || !trimmed.includes("}")) return [];
+
+    const keys = [];
+    const regex = /"([^"]+)"\s*:/g;
+    let match;
+
+    while ((match = regex.exec(trimmed))) {
+        keys.push(match[1]);
+    }
+
+    return keys;
+}
+
+function getRank(key) {
+    const index = ORDER.indexOf(key);
+    return index === -1 ? 999 : index;
+}
+
+function lines(text) {
+    return text.split(/\r?\n/);
+}
+
+function countChar(text, char) {
+    return [...text].filter((c) => c === char).length;
+}
+
+function stripStrings(text) {
+    return text.replace(/"(?:\\.|[^"\\])*"/g, '""');
 }
