@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("fs");
+const chalk = require("chalk");
 
 const files = process.argv.slice(2);
 let hasErrors = false;
@@ -9,19 +10,35 @@ const SHORT_OBJECT_MAX_LEN = 140;
 
 const ORDER = [
     "@P", "@ID", "id",
+
     "type", "mode", "action", "lookup",
+    "xform.before",
+
     "group", "slice", "sound", "event_name",
-    "size", "pos", "pivot", "ratio",
+
+    "size", "pos", "anchor",
+    "pivot", "pivot.x", "pivot.y",
+    "ratio",
+
     "layout", "props", "@O", "@H",
-    "visible", "opacity",
-    "from", "to", "from.x", "from.y", "to.x", "to.y",
+
+    "visible", "managed", "opacity", "background", "blend",
+
+    "from", "from.x", "from.y",
+    "to", "to.x", "to.y",
+
     "duration", "repeat", "interpolator",
+
     "states",
     "content"
 ];
 
 if (!files.length) {
-    console.error("Usage: node tools/jmm-check.js <file.jmm> [...files]");
+    console.log(chalk.red("No files provided."));
+    console.log();
+    console.log("Usage:");
+    console.log("  node tools/jmm-check.js path/to/file.jmm");
+    console.log("  node tools/jmm-check.js src/**/*.jmm");
     process.exit(1);
 }
 
@@ -37,25 +54,43 @@ for (const file of files) {
     checkContentLast(file, text);
 }
 
-process.exit(hasErrors ? 1 : 0);
+if (hasErrors) {
+    console.log();
+    console.log(chalk.red.bold("JMM check failed."));
+    process.exit(1);
+}
 
-function report(file, line, message) {
+console.log(chalk.green.bold("JMM check passed."));
+process.exit(0);
+
+function report(file, line, code, title, details = []) {
     hasErrors = true;
-    console.log(`${file}:${line}: ${message}`);
+
+    console.log();
+    console.log(`${chalk.gray(file)}:${chalk.yellow(line)} ${chalk.red.bold(code)} ${chalk.bold(title)}`);
+
+    for (const detail of details) {
+        console.log(`  ${detail}`);
+    }
 }
 
 function checkJson(file, text) {
     try {
         JSON.parse(text);
     } catch (e) {
-        report(file, 1, `Invalid JSON/JMM: ${e.message}`);
+        report(file, 1, "JMM000", "Invalid JSON/JMM syntax.", [
+            `${chalk.gray("Reason:")} ${e.message}`,
+            `${chalk.gray("Fix:")} check quotes, commas and brackets. Remember: JSON requires double quotes.`
+        ]);
     }
 }
 
 function checkTabs(file, text) {
     lines(text).forEach((line, i) => {
         if (line.includes("\t")) {
-            report(file, i + 1, "Tabs are not allowed. Use spaces.");
+            report(file, i + 1, "JMM001", "Tabs are not allowed.", [
+                `${chalk.gray("Fix:")} replace tabs with spaces.`
+            ]);
         }
     });
 }
@@ -63,21 +98,31 @@ function checkTabs(file, text) {
 function checkTrailingWhitespace(file, text) {
     lines(text).forEach((line, i) => {
         if (/[ \t]+$/.test(line)) {
-            report(file, i + 1, "Trailing whitespace.");
+            report(file, i + 1, "JMM002", "Trailing whitespace.", [
+                `${chalk.gray("Fix:")} remove spaces at the end of the line.`
+            ]);
         }
     });
 }
 
 function checkSpacesAfterColonAndComma(file, text) {
     lines(text).forEach((line, i) => {
-        if (line.trim().startsWith("//")) return;
+        const trimmed = line.trim();
 
-        if (/"[^"]+"\s*:[^\s{}\[\]",0-9\-]/.test(line)) {
-            report(file, i + 1, "Expected one space after colon.");
+        if (!trimmed || trimmed.startsWith("//")) return;
+
+        if (/"[^"]+"\s*:[^\s{}\[\]",0-9\-truefalsenull]/.test(line)) {
+            report(file, i + 1, "JMM003", "Missing space after colon.", [
+                `${chalk.gray("Bad:")}  "type":"scale"`,
+                `${chalk.gray("Good:")} "type": "scale"`
+            ]);
         }
 
         if (/,[^\s{}\[\]"]/g.test(line)) {
-            report(file, i + 1, "Expected one space after comma.");
+            report(file, i + 1, "JMM004", "Missing space after comma.", [
+                `${chalk.gray("Bad:")}  [1,2,3]`,
+                `${chalk.gray("Good:")} [1, 2, 3]`
+            ]);
         }
     });
 }
@@ -86,42 +131,40 @@ function checkMultilineSmallObjects(file, text) {
     const ls = lines(text);
 
     for (let i = 0; i < ls.length; i++) {
-        const line = ls[i];
-
-        if (!line.trim().endsWith("{")) continue;
+        if (!ls[i].trim().endsWith("{")) continue;
 
         const startLine = i;
         let depth = 0;
         let collected = "";
 
         for (let j = i; j < ls.length; j++) {
-            const current = stripStrings(ls[j]);
+            const noStrings = stripStrings(ls[j]);
 
-            depth += countChar(current, "{");
-            depth -= countChar(current, "}");
+            depth += countChar(noStrings, "{");
+            depth -= countChar(noStrings, "}");
 
             collected += ls[j].trim() + " ";
 
             if (depth === 0) {
                 const objectText = collected.trim();
-
-                const isSmall =
-                    objectText.length <= SHORT_OBJECT_MAX_LEN &&
-                    !objectText.includes('"content"') &&
-                    !objectText.includes('"layout"') &&
-                    !objectText.includes('"props"') &&
-                    !objectText.includes('"states"') &&
-                    !objectText.includes('"@O"') &&
-                    !objectText.includes('"@H"');
-
                 const isMultiline = j > startLine;
 
-                if (isSmall && isMultiline) {
-                    report(
-                        file,
-                        startLine + 1,
-                        `Small object should probably be stored in one line (${objectText.length} chars).`
-                    );
+                const shouldStayMultiline =
+                    objectText.includes('"content"') ||
+                    objectText.includes('"layout"') ||
+                    objectText.includes('"props"') ||
+                    objectText.includes('"states"') ||
+                    objectText.includes('"@O"') ||
+                    objectText.includes('"@H"');
+
+                const isSmall = objectText.length <= SHORT_OBJECT_MAX_LEN;
+
+                if (isMultiline && isSmall && !shouldStayMultiline) {
+                    report(file, startLine + 1, "JMM005", "Small object should probably be one line.", [
+                        `${chalk.gray("Length:")} ${objectText.length} chars`,
+                        `${chalk.gray("Rule:")} short simple objects should be compact.`,
+                        `${chalk.gray("Example:")} {"type": "delay", "duration": 300}`
+                    ]);
                 }
 
                 break;
@@ -131,28 +174,30 @@ function checkMultilineSmallObjects(file, text) {
 }
 
 function checkPropertyOrder(file, text) {
-    const ls = lines(text);
-
-    ls.forEach((line, i) => {
+    lines(text).forEach((line, i) => {
         const keys = extractKeysFromCompactObject(line);
 
         if (keys.length < 2) return;
 
-        let previousRank = -1;
+        const knownKeys = keys.filter((key) => getRank(key) !== 999);
+        if (knownKeys.length < 2) return;
 
-        for (const key of keys) {
-            const rank = getRank(key);
+        const expectedKnownKeys = [...knownKeys].sort((a, b) => getRank(a) - getRank(b));
 
-            if (rank < previousRank) {
-                report(
-                    file,
-                    i + 1,
-                    `Property "${key}" seems to be in wrong order. Expected common JMM order.`
-                );
+        for (let index = 0; index < knownKeys.length; index++) {
+            if (knownKeys[index] !== expectedKnownKeys[index]) {
+                const wrongKey = knownKeys[index];
+                const expectedKey = expectedKnownKeys[index];
+
+                report(file, i + 1, "JMM006", `Property "${wrongKey}" is out of order.`, [
+                    `${chalk.gray("Current known order:")}  ${knownKeys.join(chalk.gray(" → "))}`,
+                    `${chalk.gray("Expected known order:")} ${expectedKnownKeys.join(chalk.gray(" → "))}`,
+                    `${chalk.gray("Fix:")} move ${chalk.yellow(`"${wrongKey}"`)} around ${chalk.yellow(`"${expectedKey}"`)}.`,
+                    `${chalk.gray("Note:")} unknown fields are ignored and should not break the order check.`
+                ]);
+
                 return;
             }
-
-            previousRank = rank;
         }
     });
 }
@@ -161,8 +206,13 @@ function checkContentLast(file, text) {
     lines(text).forEach((line, i) => {
         const keys = extractKeysFromCompactObject(line);
 
-        if (keys.includes("content") && keys[keys.length - 1] !== "content") {
-            report(file, i + 1, `"content" should be the last property.`);
+        if (!keys.includes("content")) return;
+
+        if (keys[keys.length - 1] !== "content") {
+            report(file, i + 1, "JMM007", `"content" should be the last property.`, [
+                `${chalk.gray("Current:")} ${keys.join(chalk.gray(" → "))}`,
+                `${chalk.gray("Rule:")} "content" usually contains children, so it should close the object.`
+            ]);
         }
     });
 }
