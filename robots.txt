@@ -1,3 +1,89 @@
-# https://www.robotstxt.org/robotstxt.html
-User-agent: *
-Disallow:
+#!/usr/bin/env node
+
+const fs = require("fs");
+const path = require("path");
+
+const files = process.argv.slice(2);
+
+if (!files.length) {
+    console.error("Usage: node tools/jmm-check.js <file.jmm> [...files]");
+    process.exit(1);
+}
+
+let hasErrors = false;
+
+for (const file of files) {
+    const text = fs.readFileSync(file, "utf8");
+
+    checkJson(file, text);
+    checkTabs(file, text);
+    checkTrailingWhitespace(file, text);
+    checkIndent(file, text);
+    checkCommonPropertyOrder(file, text);
+}
+
+process.exit(hasErrors ? 1 : 0);
+
+function report(file, line, message) {
+    hasErrors = true;
+    console.log(`${file}:${line}: ${message}`);
+}
+
+function checkJson(file, text) {
+    try {
+        JSON.parse(text);
+    } catch (e) {
+        report(file, 1, `Invalid JSON/JMM: ${e.message}`);
+    }
+}
+
+function checkTabs(file, text) {
+    text.split(/\r?\n/).forEach((line, index) => {
+        if (line.includes("\t")) {
+            report(file, index + 1, "Tabs are not allowed. Use 4 spaces.");
+        }
+    });
+}
+
+function checkTrailingWhitespace(file, text) {
+    text.split(/\r?\n/).forEach((line, index) => {
+        if (/[ \t]+$/.test(line)) {
+            report(file, index + 1, "Trailing whitespace.");
+        }
+    });
+}
+
+function checkIndent(file, text) {
+    text.split(/\r?\n/).forEach((line, index) => {
+        if (!line.trim()) return;
+
+        const spaces = line.match(/^ */)[0].length;
+
+        if (spaces % 4 !== 0) {
+            report(file, index + 1, `Indent should be multiple of 4 spaces. Found ${spaces}.`);
+        }
+    });
+}
+
+function checkCommonPropertyOrder(file, text) {
+    const lines = text.split(/\r?\n/);
+
+    lines.forEach((line, index) => {
+        const compactObjectMatch = line.match(/\{(.+)\}/);
+        if (!compactObjectMatch) return;
+
+        const body = compactObjectMatch[1];
+
+        const typeIndex = body.indexOf('"type"');
+        const contentIndex = body.indexOf('"content"');
+        const lookupIndex = body.indexOf('"lookup"');
+
+        if (contentIndex !== -1 && typeIndex !== -1 && contentIndex < typeIndex) {
+            report(file, index + 1, `"content" should not be before "type".`);
+        }
+
+        if (contentIndex !== -1 && lookupIndex !== -1 && contentIndex < lookupIndex) {
+            report(file, index + 1, `"content" should be after "lookup".`);
+        }
+    });
+}
