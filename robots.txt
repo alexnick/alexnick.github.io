@@ -1,48 +1,94 @@
 #!/usr/bin/env node
 
 const fs = require("fs");
-const chalk = require("chalk");
+const path = require("path");
 
-const files = process.argv.slice(2);
-let hasErrors = false;
+const color = {
+    red: (s) => `\x1b[31m${s}\x1b[0m`,
+    green: (s) => `\x1b[32m${s}\x1b[0m`,
+    yellow: (s) => `\x1b[33m${s}\x1b[0m`,
+    gray: (s) => `\x1b[90m${s}\x1b[0m`,
+    bold: (s) => `\x1b[1m${s}\x1b[0m`
+};
 
 const SHORT_OBJECT_MAX_LEN = 140;
 
 const ORDER = [
-    "@P", "@ID", "id",
+    "@P",
+    "@ID",
+    "id",
 
-    "type", "mode", "action", "lookup",
+    "type",
+    "mode",
+    "action",
+    "lookup",
     "xform.before",
 
-    "group", "slice", "sound", "event_name",
+    "group",
+    "slice",
+    "sound",
+    "event_name",
 
-    "size", "pos", "anchor",
-    "pivot", "pivot.x", "pivot.y",
+    "size",
+    "pos",
+    "anchor",
+    "pivot",
+    "pivot.x",
+    "pivot.y",
     "ratio",
 
-    "layout", "props", "@O", "@H",
+    "layout",
+    "props",
+    "@O",
+    "@H",
 
-    "visible", "managed", "opacity", "background", "blend",
+    "visible",
+    "managed",
+    "opacity",
+    "background",
+    "blend",
 
-    "from", "from.x", "from.y",
-    "to", "to.x", "to.y",
+    "from",
+    "from.x",
+    "from.y",
+    "to",
+    "to.x",
+    "to.y",
 
-    "duration", "repeat", "interpolator",
+    "duration",
+    "repeat",
+    "interpolator",
 
     "states",
     "content"
 ];
 
-if (!files.length) {
-    console.log(chalk.red("No files provided."));
+let hasErrors = false;
+let totalErrors = 0;
+let checkedFiles = 0;
+
+const inputArgs = process.argv.slice(2);
+
+if (!inputArgs.length) {
+    console.log(color.red("No files or directories provided."));
     console.log();
     console.log("Usage:");
     console.log("  node tools/jmm-check.js path/to/file.jmm");
-    console.log("  node tools/jmm-check.js src/**/*.jmm");
+    console.log("  node tools/jmm-check.js path/to/folder");
+    console.log("  node tools/jmm-check.js .");
     process.exit(1);
 }
 
+const files = collectJmmFiles(inputArgs);
+
+if (!files.length) {
+    console.log(color.yellow("No .jmm files found."));
+    process.exit(0);
+}
+
 for (const file of files) {
+    checkedFiles += 1;
+
     const text = fs.readFileSync(file, "utf8");
 
     checkJson(file, text);
@@ -50,24 +96,32 @@ for (const file of files) {
     checkTrailingWhitespace(file, text);
     checkSpacesAfterColonAndComma(file, text);
     checkMultilineSmallObjects(file, text);
-    checkPropertyOrder(file, text);
-    checkContentLast(file, text);
+    checkPropertyOrderInCompactObjects(file, text);
+    checkContentLastInCompactObjects(file, text);
+    checkHybridContentStyle(file, text);
 }
+
+console.log();
+console.log(color.bold("JMM check summary"));
+console.log(`${color.gray("Files checked:")} ${checkedFiles}`);
+console.log(`${color.gray("Errors:")} ${totalErrors}`);
 
 if (hasErrors) {
     console.log();
-    console.log(chalk.red.bold("JMM check failed."));
+    console.log(color.red(color.bold("JMM check failed.")));
     process.exit(1);
 }
 
-console.log(chalk.green.bold("JMM check passed."));
+console.log();
+console.log(color.green(color.bold("JMM check passed.")));
 process.exit(0);
 
 function report(file, line, code, title, details = []) {
     hasErrors = true;
+    totalErrors += 1;
 
     console.log();
-    console.log(`${chalk.gray(file)}:${chalk.yellow(line)} ${chalk.red.bold(code)} ${chalk.bold(title)}`);
+    console.log(`${color.gray(file)}:${color.yellow(line)} ${color.red(color.bold(code))} ${color.bold(title)}`);
 
     for (const detail of details) {
         console.log(`  ${detail}`);
@@ -79,8 +133,9 @@ function checkJson(file, text) {
         JSON.parse(text);
     } catch (e) {
         report(file, 1, "JMM000", "Invalid JSON/JMM syntax.", [
-            `${chalk.gray("Reason:")} ${e.message}`,
-            `${chalk.gray("Fix:")} check quotes, commas and brackets. Remember: JSON requires double quotes.`
+            `${color.gray("Reason:")} ${e.message}`,
+            `${color.gray("Fix:")} check quotes, commas and brackets.`,
+            `${color.gray("Note:")} pure JSON requires double quotes, not single quotes.`
         ]);
     }
 }
@@ -89,7 +144,7 @@ function checkTabs(file, text) {
     lines(text).forEach((line, i) => {
         if (line.includes("\t")) {
             report(file, i + 1, "JMM001", "Tabs are not allowed.", [
-                `${chalk.gray("Fix:")} replace tabs with spaces.`
+                `${color.gray("Fix:")} replace tabs with spaces.`
             ]);
         }
     });
@@ -99,7 +154,7 @@ function checkTrailingWhitespace(file, text) {
     lines(text).forEach((line, i) => {
         if (/[ \t]+$/.test(line)) {
             report(file, i + 1, "JMM002", "Trailing whitespace.", [
-                `${chalk.gray("Fix:")} remove spaces at the end of the line.`
+                `${color.gray("Fix:")} remove spaces at the end of the line.`
             ]);
         }
     });
@@ -111,17 +166,19 @@ function checkSpacesAfterColonAndComma(file, text) {
 
         if (!trimmed || trimmed.startsWith("//")) return;
 
-        if (/"[^"]+"\s*:[^\s{}\[\]",0-9\-truefalsenull]/.test(line)) {
+        const noStrings = stripStringsButKeepPunctuation(line);
+
+        if (/"[^"]*"\s*:\S/.test(line) && !/"[^"]*"\s*:\s/.test(line)) {
             report(file, i + 1, "JMM003", "Missing space after colon.", [
-                `${chalk.gray("Bad:")}  "type":"scale"`,
-                `${chalk.gray("Good:")} "type": "scale"`
+                `${color.gray("Bad:")}  "type":"scale"`,
+                `${color.gray("Good:")} "type": "scale"`
             ]);
         }
 
-        if (/,[^\s{}\[\]"]/g.test(line)) {
+        if (/,[^\s}\]\r\n]/.test(noStrings)) {
             report(file, i + 1, "JMM004", "Missing space after comma.", [
-                `${chalk.gray("Bad:")}  [1,2,3]`,
-                `${chalk.gray("Good:")} [1, 2, 3]`
+                `${color.gray("Bad:")}  [1,2,3]`,
+                `${color.gray("Good:")} [1, 2, 3]`
             ]);
         }
     });
@@ -131,49 +188,52 @@ function checkMultilineSmallObjects(file, text) {
     const ls = lines(text);
 
     for (let i = 0; i < ls.length; i++) {
-        if (!ls[i].trim().endsWith("{")) continue;
+        if (!looksLikeObjectStart(ls[i])) continue;
 
-        const startLine = i;
-        let depth = 0;
-        let collected = "";
+        const block = readObjectBlock(ls, i);
+        if (!block) continue;
 
-        for (let j = i; j < ls.length; j++) {
-            const noStrings = stripStrings(ls[j]);
+        const objectText = compactText(block.lines);
+        const isMultiline = block.endLine > block.startLine;
 
-            depth += countChar(noStrings, "{");
-            depth -= countChar(noStrings, "}");
+        if (!isMultiline) continue;
 
-            collected += ls[j].trim() + " ";
+        const hasContent = objectText.includes('"content"');
+        const hasForceMultilineStructure =
+            objectText.includes('"layout"') ||
+            objectText.includes('"props"') ||
+            objectText.includes('"states"') ||
+            objectText.includes('"@O"') ||
+            objectText.includes('"@H"');
 
-            if (depth === 0) {
-                const objectText = collected.trim();
-                const isMultiline = j > startLine;
+        const isSmall = objectText.length <= SHORT_OBJECT_MAX_LEN;
 
-                const shouldStayMultiline =
-                    objectText.includes('"content"') ||
-                    objectText.includes('"layout"') ||
-                    objectText.includes('"props"') ||
-                    objectText.includes('"states"') ||
-                    objectText.includes('"@O"') ||
-                    objectText.includes('"@H"');
+        /*
+            Important:
+            content is NOT a generic "force multiline object" key.
 
-                const isSmall = objectText.length <= SHORT_OBJECT_MAX_LEN;
+            Correct JMM style for content objects is hybrid:
 
-                if (isMultiline && isSmall && !shouldStayMultiline) {
-                    report(file, startLine + 1, "JMM005", "Small object should probably be one line.", [
-                        `${chalk.gray("Length:")} ${objectText.length} chars`,
-                        `${chalk.gray("Rule:")} short simple objects should be compact.`,
-                        `${chalk.gray("Example:")} {"type": "delay", "duration": 300}`
-                    ]);
-                }
+                {"type": "set-widget", "lookup": "...", "content": [
+                    ...
+                ]}
 
-                break;
-            }
+            So objects with content are handled by checkHybridContentStyle(),
+            not by this generic small-object check.
+        */
+        if (hasContent) continue;
+
+        if (isSmall && !hasForceMultilineStructure) {
+            report(file, i + 1, "JMM005", "Small object should probably be one line.", [
+                `${color.gray("Length:")} ${objectText.length} chars`,
+                `${color.gray("Rule:")} short simple objects should be compact.`,
+                `${color.gray("Example:")} {"type": "delay", "duration": 300}`
+            ]);
         }
     }
 }
 
-function checkPropertyOrder(file, text) {
+function checkPropertyOrderInCompactObjects(file, text) {
     lines(text).forEach((line, i) => {
         const keys = extractKeysFromCompactObject(line);
 
@@ -190,10 +250,10 @@ function checkPropertyOrder(file, text) {
                 const expectedKey = expectedKnownKeys[index];
 
                 report(file, i + 1, "JMM006", `Property "${wrongKey}" is out of order.`, [
-                    `${chalk.gray("Current known order:")}  ${knownKeys.join(chalk.gray(" → "))}`,
-                    `${chalk.gray("Expected known order:")} ${expectedKnownKeys.join(chalk.gray(" → "))}`,
-                    `${chalk.gray("Fix:")} move ${chalk.yellow(`"${wrongKey}"`)} around ${chalk.yellow(`"${expectedKey}"`)}.`,
-                    `${chalk.gray("Note:")} unknown fields are ignored and should not break the order check.`
+                    `${color.gray("Current known order:")}  ${knownKeys.join(color.gray(" → "))}`,
+                    `${color.gray("Expected known order:")} ${expectedKnownKeys.join(color.gray(" → "))}`,
+                    `${color.gray("Fix:")} move ${color.yellow(`"${wrongKey}"`)} around ${color.yellow(`"${expectedKey}"`)}.`,
+                    `${color.gray("Note:")} unknown fields are ignored and should not break the order check.`
                 ]);
 
                 return;
@@ -202,7 +262,7 @@ function checkPropertyOrder(file, text) {
     });
 }
 
-function checkContentLast(file, text) {
+function checkContentLastInCompactObjects(file, text) {
     lines(text).forEach((line, i) => {
         const keys = extractKeysFromCompactObject(line);
 
@@ -210,11 +270,203 @@ function checkContentLast(file, text) {
 
         if (keys[keys.length - 1] !== "content") {
             report(file, i + 1, "JMM007", `"content" should be the last property.`, [
-                `${chalk.gray("Current:")} ${keys.join(chalk.gray(" → "))}`,
-                `${chalk.gray("Rule:")} "content" usually contains children, so it should close the object.`
+                `${color.gray("Current:")} ${keys.join(color.gray(" → "))}`,
+                `${color.gray("Rule:")} "content" usually contains children, so it should close the object.`
             ]);
         }
     });
+}
+
+function checkHybridContentStyle(file, text) {
+    const ls = lines(text);
+
+    for (let i = 0; i < ls.length; i++) {
+        if (!looksLikeObjectStart(ls[i])) continue;
+
+        const block = readObjectBlock(ls, i);
+        if (!block) continue;
+
+        const objectText = compactText(block.lines);
+
+        if (!objectText.includes('"content"')) continue;
+
+        const contentLineIndex = findLineIndex(block.lines, /"content"\s*:/);
+        if (contentLineIndex === -1) continue;
+
+        const absoluteContentLine = block.startLine + contentLineIndex;
+        const contentLine = block.lines[contentLineIndex].trim();
+
+        const keysBeforeContent = extractKeysBeforeContent(block.lines);
+        const allTopLevelLikeKeys = extractKeysFromText(block.lines.join("\n"));
+
+        if (allTopLevelLikeKeys.includes("content") && allTopLevelLikeKeys[allTopLevelLikeKeys.length - 1] !== "content") {
+            report(file, absoluteContentLine + 1, "JMM008", `"content" should be the last property in content objects.`, [
+                `${color.gray("Current detected order:")} ${allTopLevelLikeKeys.join(color.gray(" → "))}`,
+                `${color.gray("Rule:")} header fields first, "content": [ last.`
+            ]);
+        }
+
+        if (!/"content"\s*:\s*\[\s*$/.test(contentLine)) {
+            report(file, absoluteContentLine + 1, "JMM009", `"content" array should open on the same header line.`, [
+                `${color.gray("Bad:")}`,
+                `  "content":`,
+                `  [`,
+                `${color.gray("Good:")}`,
+                `  "content": [`,
+                `${color.gray("Rule:")} content uses hybrid style: compact object header, multiline content array.`
+            ]);
+        }
+
+        /*
+            Detect this bad style:
+
+                {
+                    "type": "set-widget",
+                    "lookup": "...",
+                    "content": [
+                        ...
+                    ]
+                }
+
+            Expected:
+
+                {"type": "set-widget", "lookup": "...", "content": [
+                    ...
+                ]}
+
+            We only warn when the object does not contain known force-multiline config blocks.
+            This keeps layout/props-heavy objects from being over-policed.
+        */
+        const startsAsPlainMultilineObject = block.lines[0].trim() === "{";
+        const hasForceMultilineStructure =
+            objectText.includes('"layout"') ||
+            objectText.includes('"props"') ||
+            objectText.includes('"states"') ||
+            objectText.includes('"@O"') ||
+            objectText.includes('"@H"');
+
+        if (startsAsPlainMultilineObject && !hasForceMultilineStructure && keysBeforeContent.length > 0) {
+            report(file, block.startLine + 1, "JMM010", "Content object header should be compact.", [
+                `${color.gray("Rule:")} objects with "content" usually keep fields before content on one header line.`,
+                `${color.gray("Expected style:")} {"type": "...", "lookup": "...", "content": [`,
+                `${color.gray("Then:")} content array items are formatted on following lines.`
+            ]);
+        }
+
+        /*
+            Check property order before content.
+
+            Example expected:
+                type → mode → lookup → xform.before → from.x → from.y → to.x → to.y → duration → content
+        */
+        const knownKeysBeforeContent = keysBeforeContent.filter((key) => getRank(key) !== 999);
+        const expectedKnownKeys = [...knownKeysBeforeContent].sort((a, b) => getRank(a) - getRank(b));
+
+        for (let k = 0; k < knownKeysBeforeContent.length; k++) {
+            if (knownKeysBeforeContent[k] !== expectedKnownKeys[k]) {
+                report(file, absoluteContentLine + 1, "JMM011", `Header property "${knownKeysBeforeContent[k]}" is out of order before content.`, [
+                    `${color.gray("Current known header order:")}  ${knownKeysBeforeContent.join(color.gray(" → "))}`,
+                    `${color.gray("Expected known header order:")} ${expectedKnownKeys.join(color.gray(" → "))}`,
+                    `${color.gray("Rule:")} content object header follows common JMM property order, then "content" comes last.`
+                ]);
+                break;
+            }
+        }
+    }
+}
+
+function collectJmmFiles(args) {
+    const result = [];
+
+    for (const arg of args) {
+        const normalized = path.resolve(process.cwd(), arg);
+
+        if (!fs.existsSync(normalized)) {
+            continue;
+        }
+
+        const stat = fs.statSync(normalized);
+
+        if (stat.isFile()) {
+            if (normalized.toLowerCase().endsWith(".jmm")) {
+                result.push(normalized);
+            }
+            continue;
+        }
+
+        if (stat.isDirectory()) {
+            walkDirectory(normalized, result);
+        }
+    }
+
+    return unique(result);
+}
+
+function walkDirectory(dir, result) {
+    const ignoredDirs = new Set([
+        "node_modules",
+        ".git",
+        ".idea",
+        "dist",
+        "build",
+        "coverage"
+    ]);
+
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+        if (entry.isDirectory()) {
+            if (ignoredDirs.has(entry.name)) continue;
+            walkDirectory(path.join(dir, entry.name), result);
+            continue;
+        }
+
+        if (entry.isFile() && entry.name.toLowerCase().endsWith(".jmm")) {
+            result.push(path.join(dir, entry.name));
+        }
+    }
+}
+
+function unique(items) {
+    return [...new Set(items)];
+}
+
+function looksLikeObjectStart(line) {
+    const trimmed = line.trim();
+
+    if (!trimmed) return false;
+
+    return (
+        trimmed === "{" ||
+        trimmed.endsWith("{") ||
+        /^[{]/.test(trimmed) ||
+        /:\s*\{\s*$/.test(trimmed)
+    );
+}
+
+function readObjectBlock(ls, startLine) {
+    let depth = 0;
+    const result = [];
+
+    for (let i = startLine; i < ls.length; i++) {
+        const line = ls[i];
+        const noStrings = stripStrings(line);
+
+        depth += countChar(noStrings, "{");
+        depth -= countChar(noStrings, "}");
+
+        result.push(line);
+
+        if (depth === 0 && result.length > 0) {
+            return {
+                startLine,
+                endLine: i,
+                lines: result
+            };
+        }
+    }
+
+    return null;
 }
 
 function extractKeysFromCompactObject(line) {
@@ -222,15 +474,38 @@ function extractKeysFromCompactObject(line) {
 
     if (!trimmed.includes("{") || !trimmed.includes("}")) return [];
 
+    return extractKeysFromText(trimmed);
+}
+
+function extractKeysFromText(text) {
     const keys = [];
     const regex = /"([^"]+)"\s*:/g;
     let match;
 
-    while ((match = regex.exec(trimmed))) {
+    while ((match = regex.exec(text))) {
         keys.push(match[1]);
     }
 
     return keys;
+}
+
+function extractKeysBeforeContent(blockLines) {
+    const joined = blockLines.join("\n");
+    const contentIndex = joined.search(/"content"\s*:/);
+
+    if (contentIndex === -1) return [];
+
+    const beforeContent = joined.slice(0, contentIndex);
+
+    return extractKeysFromText(beforeContent);
+}
+
+function findLineIndex(ls, regex) {
+    for (let i = 0; i < ls.length; i++) {
+        if (regex.test(ls[i])) return i;
+    }
+
+    return -1;
 }
 
 function getRank(key) {
@@ -242,10 +517,18 @@ function lines(text) {
     return text.split(/\r?\n/);
 }
 
+function compactText(ls) {
+    return ls.map((line) => line.trim()).join(" ").replace(/\s+/g, " ").trim();
+}
+
 function countChar(text, char) {
     return [...text].filter((c) => c === char).length;
 }
 
 function stripStrings(text) {
+    return text.replace(/"(?:\\.|[^"\\])*"/g, '""');
+}
+
+function stripStringsButKeepPunctuation(text) {
     return text.replace(/"(?:\\.|[^"\\])*"/g, '""');
 }
