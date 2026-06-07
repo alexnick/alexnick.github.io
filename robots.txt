@@ -168,7 +168,7 @@ function checkSpacesAfterColonAndComma(file, text) {
 
         const noStrings = stripStringsButKeepPunctuation(line);
 
-        if (/"[^"]*"\s*:\S/.test(line) && !/"[^"]*"\s*:\s/.test(line)) {
+        if (hasMissingSpaceAfterKeyColon(line)) {
             report(file, i + 1, "JMM003", "Missing space after colon.", [
                 `${color.gray("Bad:")}  "type":"scale"`,
                 `${color.gray("Good:")} "type": "scale"`
@@ -198,13 +198,13 @@ function checkMultilineSmallObjects(file, text) {
 
         if (!isMultiline) continue;
 
-        const hasContent = objectText.includes('"content"');
+        const hasContent = hasKey(objectText, "content");
         const hasForceMultilineStructure =
-            objectText.includes('"layout"') ||
-            objectText.includes('"props"') ||
-            objectText.includes('"states"') ||
-            objectText.includes('"@O"') ||
-            objectText.includes('"@H"');
+            hasKey(objectText, "layout") ||
+            hasKey(objectText, "props") ||
+            hasKey(objectText, "states") ||
+            hasKey(objectText, "@O") ||
+            hasKey(objectText, "@H");
 
         const isSmall = objectText.length <= SHORT_OBJECT_MAX_LEN;
 
@@ -288,25 +288,44 @@ function checkHybridContentStyle(file, text) {
 
         const objectText = compactText(block.lines);
 
-        if (!objectText.includes('"content"')) continue;
+        if (!hasKey(objectText, "content")) continue;
 
-        const contentLineIndex = findLineIndex(block.lines, /"content"\s*:/);
+        const contentLineIndex = findLineIndex(block.lines, keyRegex("content"));
         if (contentLineIndex === -1) continue;
 
         const absoluteContentLine = block.startLine + contentLineIndex;
         const contentLine = block.lines[contentLineIndex].trim();
 
-        const keysBeforeContent = extractKeysBeforeContent(block.lines);
-        const allTopLevelLikeKeys = extractKeysFromText(block.lines.join("\n"));
+        /*
+            Critical part:
+            rules about header order and "content is last" must use ONLY keys from
+            the current object level.
 
-        if (allTopLevelLikeKeys.includes("content") && allTopLevelLikeKeys[allTopLevelLikeKeys.length - 1] !== "content") {
-            report(file, absoluteContentLine + 1, "JMM008", `"content" should be the last property in content objects.`, [
-                `${color.gray("Current detected order:")} ${allTopLevelLikeKeys.join(color.gray(" → "))}`,
+            Bad old behavior:
+                type -> repeat -> content -> type -> from -> to -> duration
+
+            Correct behavior for:
+                {"type": "set", "repeat": 2, "content": [
+                    {"type": "opacity", "from": 1, "to": 0, "duration": 500}
+                ]}
+
+            Current object keys:
+                type -> repeat -> content
+
+            Children inside content are checked separately by their own object pass.
+        */
+        const topLevelKeys = extractTopLevelKeysFromObjectText(block.lines.join("\n"));
+        const contentKeyIndex = topLevelKeys.indexOf("content");
+        const keysBeforeContent = contentKeyIndex === -1 ? [] : topLevelKeys.slice(0, contentKeyIndex);
+
+        if (contentKeyIndex !== -1 && contentKeyIndex !== topLevelKeys.length - 1) {
+            report(file, absoluteContentLine + 1, "JMM008", `"content" should be the last property in content objects.", [
+                `${color.gray("Current detected order:")} ${topLevelKeys.join(color.gray(" → "))}`,
                 `${color.gray("Rule:")} header fields first, "content": [ last.`
             ]);
         }
 
-        if (!/"content"\s*:\s*\[\s*$/.test(contentLine)) {
+        if (!new RegExp(`${quotePattern("content")}\\s*:\\s*\\[\\s*$`).test(contentLine)) {
             report(file, absoluteContentLine + 1, "JMM009", `"content" array should open on the same header line.`, [
                 `${color.gray("Bad:")}`,
                 `  "content":`,
@@ -339,11 +358,11 @@ function checkHybridContentStyle(file, text) {
         */
         const startsAsPlainMultilineObject = block.lines[0].trim() === "{";
         const hasForceMultilineStructure =
-            objectText.includes('"layout"') ||
-            objectText.includes('"props"') ||
-            objectText.includes('"states"') ||
-            objectText.includes('"@O"') ||
-            objectText.includes('"@H"');
+            hasKey(objectText, "layout") ||
+            hasKey(objectText, "props") ||
+            hasKey(objectText, "states") ||
+            hasKey(objectText, "@O") ||
+            hasKey(objectText, "@H");
 
         if (startsAsPlainMultilineObject && !hasForceMultilineStructure && keysBeforeContent.length > 0) {
             report(file, block.startLine + 1, "JMM010", "Content object header should be compact.", [
@@ -447,17 +466,23 @@ function looksLikeObjectStart(line) {
 function readObjectBlock(ls, startLine) {
     let depth = 0;
     const result = [];
+    let started = false;
 
     for (let i = startLine; i < ls.length; i++) {
         const line = ls[i];
         const noStrings = stripStrings(line);
 
-        depth += countChar(noStrings, "{");
-        depth -= countChar(noStrings, "}");
+        const opens = countChar(noStrings, "{");
+        const closes = countChar(noStrings, "}");
+
+        if (opens > 0) started = true;
+
+        depth += opens;
+        depth -= closes;
 
         result.push(line);
 
-        if (depth === 0 && result.length > 0) {
+        if (started && depth === 0 && result.length > 0) {
             return {
                 startLine,
                 endLine: i,
@@ -474,30 +499,146 @@ function extractKeysFromCompactObject(line) {
 
     if (!trimmed.includes("{") || !trimmed.includes("}")) return [];
 
-    return extractKeysFromText(trimmed);
+    return extractTopLevelKeysFromObjectText(trimmed);
 }
 
-function extractKeysFromText(text) {
-    const keys = [];
-    const regex = /"([^"]+)"\s*:/g;
-    let match;
+/*
+    Extract keys ONLY from the first object's own level.
 
-    while ((match = regex.exec(text))) {
-        keys.push(match[1]);
+    For:
+        {"type": "set", "repeat": 2, "content": [
+            {"type": "opacity", "from": 1, "to": 0, "duration": 500}
+        ]}
+
+    returns:
+        ["type", "repeat", "content"]
+
+    Not:
+        ["type", "repeat", "content", "type", "from", "to", "duration"]
+*/
+function extractTopLevelKeysFromObjectText(text) {
+    const firstBrace = text.indexOf("{");
+    if (firstBrace === -1) return [];
+
+    const keys = [];
+    let objectDepth = 0;
+    let arrayDepth = 0;
+    let inString = false;
+    let quote = "";
+    let escape = false;
+
+    for (let i = firstBrace; i < text.length; i++) {
+        const ch = text[i];
+
+        if (inString) {
+            if (escape) {
+                escape = false;
+                continue;
+            }
+
+            if (ch === "\\") {
+                escape = true;
+                continue;
+            }
+
+            if (ch === quote) {
+                inString = false;
+
+                if (objectDepth === 1 && arrayDepth === 0) {
+                    const next = nextNonSpaceChar(text, i + 1);
+                    if (next && next.char === ":") {
+                        keys.push(text.slice(next.stringStart + 1, i));
+                    }
+                }
+
+                continue;
+            }
+
+            continue;
+        }
+
+        if (ch === "\"" || ch === "'") {
+            inString = true;
+            quote = ch;
+            escape = false;
+
+            const stringStart = i;
+
+            const close = findStringEnd(text, i);
+            if (close === -1) break;
+
+            if (objectDepth === 1 && arrayDepth === 0) {
+                const next = nextNonSpaceChar(text, close + 1, stringStart);
+                if (next && next.char === ":") {
+                    keys.push(text.slice(stringStart + 1, close));
+                }
+            }
+
+            i = close;
+            inString = false;
+            quote = "";
+            escape = false;
+            continue;
+        }
+
+        if (ch === "{") {
+            objectDepth += 1;
+            continue;
+        }
+
+        if (ch === "}") {
+            objectDepth -= 1;
+            if (objectDepth === 0) break;
+            continue;
+        }
+
+        if (ch === "[") {
+            arrayDepth += 1;
+            continue;
+        }
+
+        if (ch === "]") {
+            arrayDepth -= 1;
+            continue;
+        }
     }
 
     return keys;
 }
 
-function extractKeysBeforeContent(blockLines) {
-    const joined = blockLines.join("\n");
-    const contentIndex = joined.search(/"content"\s*:/);
+function findStringEnd(text, start) {
+    const quote = text[start];
+    let escape = false;
 
-    if (contentIndex === -1) return [];
+    for (let i = start + 1; i < text.length; i++) {
+        const ch = text[i];
 
-    const beforeContent = joined.slice(0, contentIndex);
+        if (escape) {
+            escape = false;
+            continue;
+        }
 
-    return extractKeysFromText(beforeContent);
+        if (ch === "\\") {
+            escape = true;
+            continue;
+        }
+
+        if (ch === quote) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+function nextNonSpaceChar(text, start) {
+    for (let i = start; i < text.length; i++) {
+        if (!/\s/.test(text[i])) {
+            return { char: text[i], index: i };
+        }
+    }
+
+    return null;
 }
 
 function findLineIndex(ls, regex) {
@@ -526,9 +667,38 @@ function countChar(text, char) {
 }
 
 function stripStrings(text) {
-    return text.replace(/"(?:\\.|[^"\\])*"/g, '""');
+    return text.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""');
 }
 
 function stripStringsButKeepPunctuation(text) {
-    return text.replace(/"(?:\\.|[^"\\])*"/g, '""');
+    return text.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""');
+}
+
+function quotePattern(key) {
+    return `(?:${escapeRegExp(`"${key}"`)}|${escapeRegExp(`'${key}'`)})`;
+}
+
+function keyRegex(key) {
+    return new RegExp(`${quotePattern(key)}\\s*:`);
+}
+
+function hasKey(text, key) {
+    return keyRegex(key).test(text);
+}
+
+function hasMissingSpaceAfterKeyColon(line) {
+    const regex = /(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*:\S/g;
+    let match;
+
+    while ((match = regex.exec(line))) {
+        if (!/(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*:\s/.test(match[0])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
